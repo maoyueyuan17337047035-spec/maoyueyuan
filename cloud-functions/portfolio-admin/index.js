@@ -13,14 +13,6 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://maoyueyuan17337
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-const credentials = {
-  SecretId: process.env.TENCENT_SECRET_ID || process.env.TENCENTCLOUD_SECRETID,
-  SecretKey: process.env.TENCENT_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY,
-  SecurityToken: process.env.TENCENT_SESSION_TOKEN || process.env.TENCENTCLOUD_SESSIONTOKEN,
-};
-
-const cos = new COS(credentials);
-
 const MIME_RULES = {
   video: {
     "video/mp4": { extension: "mp4", maxBytes: 1024 * 1024 * 1024 },
@@ -130,6 +122,7 @@ function verifyPassword(password) {
 }
 
 function configurationReady() {
+  const credentials = currentCredentials();
   return Boolean(
     BUCKET &&
       REGION &&
@@ -141,18 +134,32 @@ function configurationReady() {
   );
 }
 
+function currentCredentials() {
+  return {
+    SecretId: process.env.TENCENT_SECRET_ID || process.env.TENCENTCLOUD_SECRETID,
+    SecretKey: process.env.TENCENT_SECRET_KEY || process.env.TENCENTCLOUD_SECRETKEY,
+    SecurityToken: process.env.TENCENT_SESSION_TOKEN || process.env.TENCENTCLOUD_SESSIONTOKEN,
+  };
+}
+
+function cosClient() {
+  return new COS(currentCredentials());
+}
+
 function publicObjectUrl(key) {
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
   return `${PUBLIC_BASE_URL}/${encodedKey}`;
 }
 
 function cosCall(method, parameters) {
+  const cos = cosClient();
   return new Promise((resolve, reject) => {
     cos[method](parameters, (error, data) => (error ? reject(error) : resolve(data)));
   });
 }
 
 function signedPutUrl({ key, contentType }) {
+  const cos = cosClient();
   const headers = {
     "Content-Type": contentType,
     "Cache-Control": "public, max-age=31536000, immutable",
