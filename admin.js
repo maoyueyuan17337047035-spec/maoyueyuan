@@ -22,11 +22,33 @@ const posterName = document.querySelector("[data-poster-name]");
 const libraryList = document.querySelector("[data-library-list]");
 const libraryMessage = document.querySelector("[data-library-message]");
 const refreshLibraryButton = document.querySelector("[data-refresh-library]");
+const cosConfigStorageKey = "maoyueyuan_portfolio_cos_admin_config";
 
 let cosClient = null;
 let detectedVideo = null;
 let generatedPoster = null;
 let posterObjectUrl = "";
+
+function loadSavedCosConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(cosConfigStorageKey) || "null");
+    return saved?.secretId && saved?.secretKey ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCosConfig(secretId, secretKey) {
+  localStorage.setItem(cosConfigStorageKey, JSON.stringify({ secretId, secretKey }));
+}
+
+function clearSavedCosConfig() {
+  localStorage.removeItem(cosConfigStorageKey);
+}
+
+function createCosClient(secretId, secretKey) {
+  return new window.COS({ SecretId: secretId, SecretKey: secretKey });
+}
 
 function setMessage(element, message, type = "") {
   if (!element) return;
@@ -58,8 +80,9 @@ function showWorkspace() {
   void loadCloudWorks();
 }
 
-function disconnectCos(message = "") {
+function disconnectCos(message = "", forgetAuthorization = false) {
   cosClient = null;
+  if (forgetAuthorization) clearSavedCosConfig();
   loginForm?.reset();
   authPanel.hidden = false;
   workspace.hidden = true;
@@ -188,7 +211,7 @@ function publicUrlForKey(key) {
 function uploadCosObject({ key, body, contentType, onProgress }) {
   return new Promise((resolve, reject) => {
     if (!cosClient) return reject(new Error("腾讯云连接已经断开，请重新连接。"));
-    cosClient.uploadFile(
+    cosClient.putObject(
       {
         Bucket: config.bucket,
         Region: config.region,
@@ -196,7 +219,6 @@ function uploadCosObject({ key, body, contentType, onProgress }) {
         Body: body,
         ContentType: contentType,
         ContentDisposition: "inline",
-        SliceSize: 5 * 1024 * 1024,
         onProgress: (progress) => {
           const fraction = Number.isFinite(progress?.percent)
             ? progress.percent
@@ -415,14 +437,8 @@ loginForm?.addEventListener("submit", (event) => {
     return setMessage(loginMessage, "腾讯云上传组件加载失败，请刷新页面后重试。", "error");
   }
 
-  cosClient = new window.COS({
-    SecretId: secretId,
-    SecretKey: secretKey,
-    FileParallelLimit: 1,
-    ChunkParallelLimit: 3,
-    ChunkRetryTimes: 2,
-    Protocol: "https:",
-  });
+  cosClient = createCosClient(secretId, secretKey);
+  saveCosConfig(secretId, secretKey);
   loginForm.reset();
   showWorkspace();
 });
@@ -556,7 +572,7 @@ ingestForm?.addEventListener("submit", async (event) => {
   }
 });
 
-document.querySelector("[data-logout]")?.addEventListener("click", () => disconnectCos());
+document.querySelector("[data-logout]")?.addEventListener("click", () => disconnectCos("授权已从当前浏览器清除。", true));
 
 refreshLibraryButton?.addEventListener("click", () => void loadCloudWorks());
 
@@ -588,6 +604,12 @@ document.querySelector("[data-add-another]")?.addEventListener("click", () => {
   setMessage(publishMessage, "");
   workspace.scrollIntoView({ behavior: "smooth", block: "start" });
 });
+
+const savedCosConfig = loadSavedCosConfig();
+if (savedCosConfig && typeof window.COS === "function") {
+  cosClient = createCosClient(savedCosConfig.secretId, savedCosConfig.secretKey);
+  showWorkspace();
+}
 
 window.addEventListener("pagehide", () => {
   cosClient = null;

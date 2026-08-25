@@ -49,7 +49,7 @@ def install_mock_cos(page):
         """
         window.COS = class MockCOS {
           constructor(options) { this.options = options; }
-          uploadFile(options, callback) {
+          putObject(options, callback) {
             options.onProgress?.({ percent: 0.5, loadedSize: 1, totalSize: 2 });
             fetch('https://upload.cos.test/' + encodeURIComponent(options.Key), {
               method: 'PUT',
@@ -88,8 +88,9 @@ def main():
         install_mock_cos(page)
         page.locator("#secret-id").fill("AKIDTESTPORTFOLIO123456")
         page.locator("#secret-key").fill("test-secret-key-long-enough-123")
-        page.get_by_role("button", name="连接并进入工作台").click()
+        page.get_by_role("button", name="保存授权并进入工作台").click()
         page.locator("[data-admin-workspace]").wait_for(state="visible")
+        assert page.evaluate("Boolean(localStorage.getItem('maoyueyuan_portfolio_cos_admin_config'))")
         page.locator("input[name='title']").fill("测试海外漫剧")
         page.locator("input[name='video']").set_input_files(str(ROOT / "assets/video/mozun-fanpai.mp4"))
         page.locator("input[name='poster']").set_input_files(str(ROOT / "assets/images/mozun-fanpai-poster.jpg"))
