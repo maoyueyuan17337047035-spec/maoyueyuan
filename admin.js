@@ -1,5 +1,4 @@
 const config = window.PORTFOLIO_CONFIG || {};
-const apiBaseUrl = new URLSearchParams(window.location.search).get("api") || config.apiBaseUrl || "";
 const authPanel = document.querySelector("[data-auth-panel]");
 const workspace = document.querySelector("[data-admin-workspace]");
 const loginForm = document.querySelector("[data-login-form]");
@@ -20,16 +19,11 @@ const posterPlaceholder = posterPreview?.querySelector("div");
 const videoName = document.querySelector("[data-video-name]");
 const videoMeta = document.querySelector("[data-video-meta]");
 const posterName = document.querySelector("[data-poster-name]");
-const SESSION_KEY = "maoyueyuan-portfolio-admin-session";
 
-let sessionToken = sessionStorage.getItem(SESSION_KEY) || "";
+let cosClient = null;
 let detectedVideo = null;
 let generatedPoster = null;
 let posterObjectUrl = "";
-
-function endpoint(path) {
-  return `${apiBaseUrl.replace(/\/$/, "")}${path}`;
-}
 
 function setMessage(element, message, type = "") {
   if (!element) return;
@@ -60,33 +54,13 @@ function showWorkspace() {
   setStep("prepare");
 }
 
-function showLogin(message = "") {
-  sessionToken = "";
-  sessionStorage.removeItem(SESSION_KEY);
+function disconnectCos(message = "") {
+  cosClient = null;
+  loginForm?.reset();
   authPanel.hidden = false;
   workspace.hidden = true;
   if (message) setMessage(loginMessage, message, "error");
-}
-
-async function apiRequest(path, options = {}) {
-  if (!apiBaseUrl) throw new Error("上传服务尚未完成腾讯云配置。");
-
-  const response = await fetch(endpoint(path), {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.message || `请求失败（${response.status}）`);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function formatBytes(bytes) {
@@ -104,6 +78,23 @@ function formatBytes(bytes) {
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds)) return "—";
   return `${seconds.toFixed(1)}s`;
+}
+
+function formatCosError(error, fallback = "腾讯云请求失败，请检查密钥权限与跨域设置。") {
+  if (!error) return fallback;
+  const code = typeof error.code === "string" ? error.code : typeof error.Code === "string" ? error.Code : "";
+  const message =
+    typeof error.message === "string"
+      ? error.message
+      : typeof error.Message === "string"
+        ? error.Message
+        : typeof error.error === "string"
+          ? error.error
+          : "";
+  if (/cors|network|failed to fetch|load failed/i.test(message)) {
+    return "浏览器无法连接 COS，请在存储桶中配置 GitHub Pages 的跨域访问规则。";
+  }
+  return [code, message].filter(Boolean).join("：") || fallback;
 }
 
 function loadVideoMetadata(file) {
@@ -175,43 +166,108 @@ function showPoster(file) {
   posterPlaceholder.hidden = true;
 }
 
-function uploadFile(upload, file, onProgress) {
+function safeExtension(file, fallback) {
+  const extension = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return extension && extension.length <= 5 ? extension : fallback;
+}
+
+function makeWorkId() {
+  const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "").slice(0, 12) || Math.random().toString(36).slice(2, 14);
+  return `${Date.now()}-${random}`;
+}
+
+function publicUrlForKey(key) {
+  const base = String(config.publicBaseUrl || "").replace(/\/$/, "");
+  return `${base}/${key.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function uploadCosObject({ key, body, contentType, onProgress }) {
   return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("PUT", upload.url);
-    Object.entries(upload.headers || {}).forEach(([name, value]) => request.setRequestHeader(name, value));
-    request.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress(event.loaded / event.total);
-    };
-    request.onload = () => {
-      if (request.status >= 200 && request.status < 300) resolve();
-      else reject(new Error(`云端上传失败（${request.status}）`));
-    };
-    request.onerror = () => reject(new Error("无法连接腾讯云 COS，请检查网络和跨域设置。"));
-    request.send(file);
+    if (!cosClient) return reject(new Error("腾讯云连接已经断开，请重新连接。"));
+    cosClient.uploadFile(
+      {
+        Bucket: config.bucket,
+        Region: config.region,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ContentDisposition: "inline",
+        SliceSize: 5 * 1024 * 1024,
+        onProgress: (progress) => {
+          const fraction = Number.isFinite(progress?.percent)
+            ? progress.percent
+            : progress?.totalSize
+              ? progress.loadedSize / progress.totalSize
+              : 0;
+          onProgress?.(Math.max(0, Math.min(1, fraction || 0)));
+        },
+      },
+      (error, data) => {
+        if (error) reject(new Error(formatCosError(error, "文件上传失败。")));
+        else resolve(data);
+      },
+    );
   });
 }
 
-loginForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  setMessage(loginMessage, "正在验证…");
-  const button = loginForm.querySelector("button");
-  button.disabled = true;
+async function readCatalog() {
+  const emptyCatalog = { version: 1, updatedAt: null, works: [] };
+  if (!config.catalogUrl) return emptyCatalog;
 
   try {
-    const { token } = await apiRequest("/session", {
-      method: "POST",
-      body: { password: loginForm.elements.password.value },
-    });
-    sessionToken = token;
-    sessionStorage.setItem(SESSION_KEY, token);
-    loginForm.reset();
-    showWorkspace();
+    const separator = config.catalogUrl.includes("?") ? "&" : "?";
+    const response = await fetch(`${config.catalogUrl}${separator}v=${Date.now()}`, { cache: "no-store" });
+    if (response.status === 404) return emptyCatalog;
+    if (!response.ok) throw new Error(`目录读取失败（${response.status}）`);
+    const payload = await response.json();
+    return {
+      version: Number(payload?.version) || 1,
+      updatedAt: payload?.updatedAt || null,
+      works: Array.isArray(payload?.works) ? payload.works : [],
+    };
   } catch (error) {
-    setMessage(loginMessage, error.message, "error");
-  } finally {
-    button.disabled = false;
+    if (error instanceof TypeError) {
+      throw new Error("无法读取作品目录，请先配置存储桶跨域访问规则。");
+    }
+    throw error;
   }
+}
+
+async function writeCatalog(catalog) {
+  const body = new Blob([JSON.stringify(catalog, null, 2)], { type: "application/json;charset=utf-8" });
+  await uploadCosObject({
+    key: config.catalogKey || "portfolio/catalog/works.json",
+    body,
+    contentType: "application/json;charset=utf-8",
+  });
+}
+
+loginForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  setMessage(loginMessage, "");
+
+  const secretId = loginForm.elements.secretId.value.trim();
+  const secretKey = loginForm.elements.secretKey.value.trim();
+  if (!/^AKID[A-Za-z0-9_-]{12,}$/.test(secretId)) {
+    return setMessage(loginMessage, "SecretId 格式不正确，请重新复制。", "error");
+  }
+  if (secretKey.length < 20) {
+    return setMessage(loginMessage, "SecretKey 格式不正确，请重新复制。", "error");
+  }
+  if (typeof window.COS !== "function") {
+    return setMessage(loginMessage, "腾讯云上传组件加载失败，请刷新页面后重试。", "error");
+  }
+
+  cosClient = new window.COS({
+    SecretId: secretId,
+    SecretKey: secretKey,
+    FileParallelLimit: 1,
+    ChunkParallelLimit: 3,
+    ChunkRetryTimes: 2,
+    Protocol: "https:",
+  });
+  loginForm.reset();
+  showWorkspace();
 });
 
 videoInput?.addEventListener("change", async () => {
@@ -262,6 +318,7 @@ ingestForm?.addEventListener("submit", async (event) => {
   resultPanel.hidden = true;
   setMessage(publishMessage, "");
 
+  if (!cosClient) return disconnectCos("腾讯云连接已经断开，请重新输入密钥。");
   const video = videoInput.files[0];
   if (!video) return setMessage(publishMessage, "请先选择成片视频。", "error");
   if (video.size > 1024 * 1024 * 1024) return setMessage(publishMessage, "视频超过 1GB，请先压缩后再上传。", "error");
@@ -279,68 +336,69 @@ ingestForm?.addEventListener("submit", async (event) => {
     }
 
     setStep("authorize");
-    setProgress(8, "正在申请本次上传的短时授权");
-    const ticket = await apiRequest("/upload-ticket", {
-      method: "POST",
-      token: sessionToken,
-      body: {
-        category: ingestForm.elements.category.value,
-        title: ingestForm.elements.title.value,
-        files: [
-          { kind: "video", name: video.name, type: video.type || "video/mp4", size: video.size },
-          { kind: "poster", name: poster.name, type: poster.type || "image/jpeg", size: poster.size },
-        ],
-      },
-    });
-
-    const videoUpload = ticket.uploads.find((item) => item.kind === "video");
-    const posterUpload = ticket.uploads.find((item) => item.kind === "poster");
-    if (!videoUpload || !posterUpload) throw new Error("腾讯云没有返回完整的上传授权。");
+    setProgress(8, "正在生成腾讯云存储路径");
+    const workId = makeWorkId();
+    const category = ingestForm.elements.category.value;
+    const baseKey = `${config.uploadPrefix || "portfolio/v1/uploads"}/${category}/${workId}`;
+    const videoKey = `${baseKey}/video.${safeExtension(video, "mp4")}`;
+    const posterKey = `${baseKey}/poster.${safeExtension(poster, "jpg")}`;
 
     setStep("upload");
-    await uploadFile(videoUpload, video, (fraction) => setProgress(10 + fraction * 72, "正在上传成片到腾讯云 COS"));
-    await uploadFile(posterUpload, poster, (fraction) => setProgress(82 + fraction * 10, "正在上传作品封面"));
-
-    setStep("publish");
-    setProgress(94, "正在登记作品并更新公开目录");
-    const formatChoice = ingestForm.elements.format.value;
-    const format = formatChoice === "auto" ? ingestForm.elements.format.dataset.detected || "竖屏" : formatChoice;
-    const result = await apiRequest("/works", {
-      method: "POST",
-      token: sessionToken,
-      body: {
-        category: ingestForm.elements.category.value,
-        title: ingestForm.elements.title.value,
-        englishTitle: ingestForm.elements.englishTitle.value,
-        duration: formatDuration(detectedVideo?.duration),
-        format,
-        role: ingestForm.elements.role.value,
-        summary: ingestForm.elements.summary.value,
-        published: ingestForm.elements.published.checked,
-        videoKey: videoUpload.key,
-        posterKey: posterUpload.key,
-      },
+    await uploadCosObject({
+      key: videoKey,
+      body: video,
+      contentType: video.type || "video/mp4",
+      onProgress: (fraction) => setProgress(10 + fraction * 70, "正在上传成片到腾讯云 COS"),
+    });
+    await uploadCosObject({
+      key: posterKey,
+      body: poster,
+      contentType: poster.type || "image/jpeg",
+      onProgress: (fraction) => setProgress(80 + fraction * 12, "正在上传作品封面"),
     });
 
-    setProgress(100, result.work.published ? "作品已经公开" : "作品已经存入云端草稿");
+    setStep("publish");
+    setProgress(94, "正在更新公开作品目录");
+    const formatChoice = ingestForm.elements.format.value;
+    const format = formatChoice === "auto" ? ingestForm.elements.format.dataset.detected || "竖屏" : formatChoice;
+    const now = new Date().toISOString();
+    const work = {
+      id: workId,
+      category,
+      title: ingestForm.elements.title.value.trim(),
+      englishTitle: ingestForm.elements.englishTitle.value.trim(),
+      duration: formatDuration(detectedVideo?.duration),
+      format,
+      role: ingestForm.elements.role.value.trim(),
+      summary: ingestForm.elements.summary.value.trim(),
+      published: ingestForm.elements.published.checked,
+      video: publicUrlForKey(videoKey),
+      poster: publicUrlForKey(posterKey),
+      videoKey,
+      posterKey,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const catalog = await readCatalog();
+    catalog.updatedAt = now;
+    catalog.works = [...catalog.works.filter((item) => item?.id !== work.id), work];
+    await writeCatalog(catalog);
+
+    setProgress(100, work.published ? "作品已经公开" : "作品已经存入云端草稿");
     document.querySelectorAll("[data-step]").forEach((item) => item.classList.add("is-complete"));
-    resultTitle.textContent = `《${result.work.title}》${result.work.published ? "已发布" : "已入库"}`;
+    resultTitle.textContent = `《${work.title}》${work.published ? "已发布" : "已入库"}`;
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "center" });
-    setMessage(publishMessage, "视频、封面和作品资料均已保存。", "success");
+    setMessage(publishMessage, "视频、封面和作品资料均已保存到腾讯云 COS。", "success");
   } catch (error) {
-    if (error.status === 401) {
-      showLogin("登录已过期，请重新验证。");
-    } else {
-      setMessage(publishMessage, error.message, "error");
-      setProgress(progressBar.value, "上传没有完成，请按提示检查后重试");
-    }
+    setMessage(publishMessage, formatCosError(error, error.message || "上传未完成，请重试。"), "error");
+    setProgress(progressBar.value, "上传没有完成，请按提示检查后重试");
   } finally {
     publishButton.disabled = false;
   }
 });
 
-document.querySelector("[data-logout]")?.addEventListener("click", () => showLogin());
+document.querySelector("[data-logout]")?.addEventListener("click", () => disconnectCos());
 
 document.querySelector("[data-add-another]")?.addEventListener("click", () => {
   ingestForm.reset();
@@ -361,10 +419,9 @@ document.querySelector("[data-add-another]")?.addEventListener("click", () => {
   workspace.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-if (!apiBaseUrl) {
-  showLogin("管理页面已经完成；腾讯云上传服务尚待一次性绑定。");
-} else if (sessionToken) {
-  showWorkspace();
-} else {
-  showLogin();
-}
+window.addEventListener("pagehide", () => {
+  cosClient = null;
+  if (posterObjectUrl) URL.revokeObjectURL(posterObjectUrl);
+});
+
+disconnectCos();

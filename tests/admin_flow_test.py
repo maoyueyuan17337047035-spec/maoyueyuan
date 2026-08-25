@@ -7,70 +7,45 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE_URL = os.environ.get("PORTFOLIO_BASE_URL", "http://127.0.0.1:4174").rstrip("/")
-API_URL = "https://portfolio-admin.example.test"
-
-
-def wire_mock_cloud(page, state):
-    page.route(
-        f"{API_URL}/session",
-        lambda route: route.fulfill(
-            status=200,
-            content_type="application/json",
-            body=json.dumps({"token": "test-session", "expiresIn": 7200}),
-        ),
-    )
-
-    def ticket(route):
-        state["ticket"] = route.request.post_data_json
-        route.fulfill(
-            status=200,
-            content_type="application/json",
-            body=json.dumps(
-                {
-                    "uploadId": "test-upload",
-                    "expiresIn": 900,
-                    "uploads": [
-                        {
-                            "kind": "video",
-                            "key": "portfolio/works/overseas/2026-08-25/test-video.mp4",
-                            "url": "https://upload.example.test/video",
-                            "publicUrl": "https://cdn.example.test/test-video.mp4",
-                            "headers": {"Content-Type": "video/mp4"},
-                        },
-                        {
-                            "kind": "poster",
-                            "key": "portfolio/works/overseas/2026-08-25/test-poster.jpg",
-                            "url": "https://upload.example.test/poster",
-                            "publicUrl": "https://cdn.example.test/test-poster.jpg",
-                            "headers": {"Content-Type": "image/jpeg"},
-                        },
-                    ],
-                }
-            ),
-        )
-
-    page.route(f"{API_URL}/upload-ticket", ticket)
-
-    def publish(route):
-        body = route.request.post_data_json
-        state["publish"] = body
-        route.fulfill(
-            status=201,
-            content_type="application/json",
-            body=json.dumps({"work": {**body, "id": "test-work"}}),
-        )
-
-    page.route(f"{API_URL}/works", publish)
-
+def wire_mock_cos(page, state):
     def receive_upload(route):
         state["uploads"].append(route.request.url)
         route.fulfill(status=200, headers={"ETag": '"test-etag"'}, body="")
 
-    page.route("https://upload.example.test/**", receive_upload)
+    page.route("https://upload.cos.test/**", receive_upload)
+    page.route(
+        "**/portfolio/catalog/works.json*",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"version": 1, "works": []}),
+        ),
+    )
+
+
+def install_mock_cos(page):
+    page.evaluate(
+        """
+        window.COS = class MockCOS {
+          constructor(options) { this.options = options; }
+          uploadFile(options, callback) {
+            options.onProgress?.({ percent: 0.5, loadedSize: 1, totalSize: 2 });
+            fetch('https://upload.cos.test/' + encodeURIComponent(options.Key), {
+              method: 'PUT',
+              body: options.Body,
+            }).then(() => {
+              options.onProgress?.({ percent: 1, loadedSize: 2, totalSize: 2 });
+              callback(null, { statusCode: 200, Key: options.Key });
+            }).catch(callback);
+          }
+        };
+        void 0;
+        """
+    )
 
 
 def main():
-    state = {"uploads": [], "ticket": None, "publish": None}
+    state = {"uploads": []}
     issues = []
     screenshots = ROOT / "tests" / "artifacts"
     screenshots.mkdir(parents=True, exist_ok=True)
@@ -80,12 +55,14 @@ def main():
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("console", lambda message: issues.append(f"console:{message.type}:{message.text}") if message.type == "error" else None)
         page.on("pageerror", lambda error: issues.append(f"pageerror:{error}"))
-        wire_mock_cloud(page, state)
+        wire_mock_cos(page, state)
 
-        page.goto(f"{BASE_URL}/admin.html?api={API_URL}")
+        page.goto(f"{BASE_URL}/admin.html")
         page.wait_for_load_state("networkidle")
-        page.locator("#admin-password").fill("test-password-strong")
-        page.get_by_role("button", name="进入工作台").click()
+        install_mock_cos(page)
+        page.locator("#secret-id").fill("AKIDTESTPORTFOLIO123456")
+        page.locator("#secret-key").fill("test-secret-key-long-enough-123")
+        page.get_by_role("button", name="连接并进入工作台").click()
         page.locator("[data-admin-workspace]").wait_for(state="visible")
         page.locator("input[name='title']").fill("测试海外漫剧")
         page.locator("input[name='video']").set_input_files(str(ROOT / "assets/video/mozun-fanpai.mp4"))
@@ -97,9 +74,10 @@ def main():
 
         assert page.locator("[data-progress-value]").inner_text() == "100%"
         assert "测试海外漫剧" in page.locator("[data-result-title]").inner_text()
-        assert state["ticket"]["category"] == "overseas"
-        assert state["publish"]["category"] == "overseas"
-        assert len(state["uploads"]) == 2
+        assert len(state["uploads"]) == 3
+        assert any("video.mp4" in url for url in state["uploads"])
+        assert any("poster.jpg" in url for url in state["uploads"])
+        assert any("portfolio%2Fcatalog%2Fworks.json" in url for url in state["uploads"])
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
         page.get_by_role("button", name="继续上传下一部").click()
@@ -109,12 +87,13 @@ def main():
         page.get_by_role("button", name="上传并发布").click()
         page.locator("[data-publish-result]").wait_for(state="visible")
         assert page.locator("[data-poster-name]").inner_text() == "已从视频自动生成封面"
-        assert len(state["uploads"]) == 4
+        assert len(state["uploads"]) == 6
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
-        wire_mock_cloud(mobile, {"uploads": [], "ticket": None, "publish": None})
-        mobile.goto(f"{BASE_URL}/admin.html?api={API_URL}")
+        wire_mock_cos(mobile, {"uploads": []})
+        mobile.goto(f"{BASE_URL}/admin.html")
         mobile.wait_for_load_state("networkidle")
+        install_mock_cos(mobile)
         mobile.screenshot(path=str(screenshots / "admin-mobile.png"), full_page=True)
         assert mobile.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 

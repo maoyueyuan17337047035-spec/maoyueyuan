@@ -139,7 +139,12 @@ main { width: var(--shell); margin: 0 auto; }
   line-height: 1.7;
 }
 
-.auth-panel form { align-self: end; }
+.auth-panel form {
+  display: grid;
+  align-self: end;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
 
 label > span,
 .auth-panel label {
@@ -150,24 +155,33 @@ label > span,
   letter-spacing: 0.08em;
 }
 
-.password-row { display: grid; grid-template-columns: 1fr auto; border-bottom: 1px solid var(--line-strong); }
-
-.password-row input,
-.password-row button {
+.auth-panel input,
+.connect-button {
   min-height: 58px;
-  border: 0;
-  color: var(--white);
-  background: transparent;
 }
 
-.password-row input { min-width: 0; padding: 0 10px; font-size: 18px; }
+.auth-panel input {
+  width: 100%;
+  margin-bottom: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--white);
+  background: transparent;
+  font-size: 16px;
+}
 
-.password-row button {
-  padding: 0 24px;
+.connect-button {
+  margin-top: 8px;
+  padding: 0 26px;
+  border: 0;
   color: var(--black);
   background: var(--paper);
   font-weight: 650;
 }
+
+.connect-button:hover { background: var(--white); }
 
 .admin-workspace { padding-bottom: 120px; }
 

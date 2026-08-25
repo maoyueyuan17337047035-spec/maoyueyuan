@@ -25,15 +25,15 @@
       <section class="auth-panel" data-auth-panel aria-labelledby="auth-title">
         <div>
           <p class="admin-index">ACCESS 01</p>
-          <h2 id="auth-title">验证管理身份</h2>
-          <p>上传入口不会出现在公开导航中。密码只用于换取短时会话，不会保存在浏览器。</p>
+          <h2 id="auth-title">连接腾讯云</h2>
+          <p>密钥只在当前页面内存中用于本次上传，关闭或刷新页面后立即清除，不会写入 GitHub 或浏览器存储。</p>
         </div>
         <form data-login-form>
-          <label for="admin-password">管理密码</label>
-          <div class="password-row">
-            <input id="admin-password" name="password" type="password" autocomplete="current-password" required />
-            <button type="submit">进入工作台</button>
-          </div>
+          <label for="secret-id">SecretId</label>
+          <input id="secret-id" name="secretId" type="text" autocomplete="off" spellcheck="false" placeholder="输入腾讯云 SecretId" required />
+          <label for="secret-key">SecretKey</label>
+          <input id="secret-key" name="secretKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入腾讯云 SecretKey" required />
+          <button class="connect-button" type="submit">连接并进入工作台</button>
           <p class="form-message" data-login-message aria-live="polite"></p>
         </form>
       </section>
@@ -44,12 +44,12 @@
             <p class="admin-eyebrow">INGEST DESK</p>
             <h2 id="workspace-title">新增作品</h2>
           </div>
-          <button class="text-button" type="button" data-logout>退出管理</button>
+          <button class="text-button" type="button" data-logout>断开腾讯云</button>
         </header>
 
         <ol class="ingest-rail" data-ingest-rail aria-label="发布进度">
           <li class="is-active" data-step="prepare"><span>01</span><strong>准备素材</strong></li>
-          <li data-step="authorize"><span>02</span><strong>获取授权</strong></li>
+          <li data-step="authorize"><span>02</span><strong>生成云端路径</strong></li>
           <li data-step="upload"><span>03</span><strong>上传云端</strong></li>
           <li data-step="publish"><span>04</span><strong>发布作品</strong></li>
         </ol>
@@ -159,9 +159,14 @@
 
     <footer class="admin-footer">
       <p>PRIVATE INGEST DESK</p>
-      <p>腾讯云 COS · 短时授权直传</p>
+      <p>腾讯云 COS · 当前会话直传</p>
     </footer>
 
+    <script
+      src="https://cdn.jsdelivr.net/npm/cos-js-sdk-v5@1.10.1/dist/cos-js-sdk-v5.min.js"
+      integrity="sha384-TGYkD0o/MPk0YG2l1BFpsCAz6KClcFUui0r0rWTJ62U6mFNjB7YVLuexmVT8+WXo"
+      crossorigin="anonymous"
+    ></script>
     <script src="portfolio-config.js"></script>
     <script src="admin.js"></script>
   </body>
