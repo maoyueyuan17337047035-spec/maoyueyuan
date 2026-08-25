@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050505" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <title>作品入库 — MAO YUEYUAN</title>
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <header class="admin-header">
+      <a class="admin-wordmark" href="./#/home">MAO YUEYUAN</a>
+      <p><span aria-hidden="true"></span> PRIVATE WORKSPACE</p>
+      <a href="./#/works">返回作品集 ↗</a>
+    </header>
+
+    <main>
+      <header class="admin-intro">
+        <p class="admin-eyebrow">WORKS INGEST / 私人作品管理</p>
+        <h1>让新作品，<br />进入作品集。</h1>
+        <p>上传视频与封面，文件将直接进入腾讯云 COS；确认发布后，公开作品页自动更新。</p>
+      </header>
+
+      <section class="auth-panel" data-auth-panel aria-labelledby="auth-title">
+        <div>
+          <p class="admin-index">ACCESS 01</p>
+          <h2 id="auth-title">验证管理身份</h2>
+          <p>上传入口不会出现在公开导航中。密码只用于换取短时会话，不会保存在浏览器。</p>
+        </div>
+        <form data-login-form>
+          <label for="admin-password">管理密码</label>
+          <div class="password-row">
+            <input id="admin-password" name="password" type="password" autocomplete="current-password" required />
+            <button type="submit">进入工作台</button>
+          </div>
+          <p class="form-message" data-login-message aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="admin-workspace" data-admin-workspace hidden aria-labelledby="workspace-title">
+        <header class="workspace-heading">
+          <div>
+            <p class="admin-eyebrow">INGEST DESK</p>
+            <h2 id="workspace-title">新增作品</h2>
+          </div>
+          <button class="text-button" type="button" data-logout>退出管理</button>
+        </header>
+
+        <ol class="ingest-rail" data-ingest-rail aria-label="发布进度">
+          <li class="is-active" data-step="prepare"><span>01</span><strong>准备素材</strong></li>
+          <li data-step="authorize"><span>02</span><strong>获取授权</strong></li>
+          <li data-step="upload"><span>03</span><strong>上传云端</strong></li>
+          <li data-step="publish"><span>04</span><strong>发布作品</strong></li>
+        </ol>
+
+        <form class="ingest-form" data-ingest-form>
+          <section class="metadata-column" aria-labelledby="metadata-title">
+            <div class="column-heading">
+              <p class="admin-index">PROJECT DATA</p>
+              <h3 id="metadata-title">作品信息</h3>
+            </div>
+
+            <div class="field-grid">
+              <label>
+                <span>作品分类</span>
+                <select name="category" required>
+                  <option value="overseas">海外漫剧</option>
+                  <option value="domestic">国内漫剧</option>
+                </select>
+              </label>
+
+              <label>
+                <span>画幅</span>
+                <select name="format" required>
+                  <option value="auto">根据视频自动识别</option>
+                  <option value="竖屏">竖屏</option>
+                  <option value="横屏">横屏</option>
+                  <option value="方形">方形</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              <span>中文片名</span>
+              <input name="title" type="text" maxlength="80" placeholder="例如：新的海外漫剧" required />
+            </label>
+
+            <label>
+              <span>英文片名 <small>选填</small></span>
+              <input name="englishTitle" type="text" maxlength="100" placeholder="ENGLISH TITLE" />
+            </label>
+
+            <label>
+              <span>能力／职责说明</span>
+              <input name="role" type="text" maxlength="100" value="公司项目 · 参与制作" required />
+            </label>
+
+            <label>
+              <span>作品概括</span>
+              <textarea name="summary" maxlength="280" rows="4" required>完整剧情成片，呈现海外漫剧内容形态。</textarea>
+            </label>
+
+            <label class="publish-switch">
+              <input name="published" type="checkbox" checked />
+              <span><strong>上传后立即公开</strong><small>关闭后只入库，不在作品页显示</small></span>
+            </label>
+          </section>
+
+          <section class="media-column" aria-labelledby="media-title">
+            <div class="column-heading">
+              <p class="admin-index">MEDIA INGEST</p>
+              <h3 id="media-title">成片与封面</h3>
+            </div>
+
+            <label class="drop-field" data-video-drop>
+              <input name="video" type="file" accept="video/mp4,video/webm,.mp4,.webm" required />
+              <span class="drop-label">VIDEO / 成片</span>
+              <strong data-video-name>选择 MP4 或 WebM 视频</strong>
+              <small data-video-meta>建议使用 H.264 MP4，单个文件不超过 1GB</small>
+            </label>
+
+            <div class="poster-workbench">
+              <label class="drop-field compact" data-poster-drop>
+                <input name="poster" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" />
+                <span class="drop-label">POSTER / 播放背景</span>
+                <strong data-poster-name>选择海报或封面</strong>
+                <small>未选择时，将从视频中自动截取一帧</small>
+              </label>
+              <figure class="poster-preview" data-poster-preview>
+                <div><span>POSTER PREVIEW</span><small>等待素材</small></div>
+                <img alt="待上传作品封面预览" hidden />
+              </figure>
+            </div>
+
+            <div class="upload-status" aria-live="polite">
+              <div><span data-progress-label>等待填写作品信息</span><strong data-progress-value>0%</strong></div>
+              <progress max="100" value="0" data-progress></progress>
+            </div>
+
+            <button class="publish-button" type="submit" data-publish-button>
+              <span>上传并发布</span><i aria-hidden="true">↗</i>
+            </button>
+            <p class="form-message" data-publish-message aria-live="polite"></p>
+          </section>
+        </form>
+
+        <section class="publish-result" data-publish-result hidden>
+          <p class="admin-index">PUBLISHED</p>
+          <h3 data-result-title>作品已发布</h3>
+          <p>视频、封面和作品资料已经写入腾讯云 COS。</p>
+          <div>
+            <a href="./#/works" data-open-public>查看公开作品页 ↗</a>
+            <button type="button" data-add-another>继续上传下一部</button>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="admin-footer">
+      <p>PRIVATE INGEST DESK</p>
+      <p>腾讯云 COS · 短时授权直传</p>
+    </footer>
+
+    <script src="portfolio-config.js"></script>
+    <script src="admin.js"></script>
+  </body>
+</html>

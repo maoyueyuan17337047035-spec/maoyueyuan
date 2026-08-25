@@ -13,6 +13,46 @@ const skipLink = document.querySelector(".skip-link");
 const mainContent = document.querySelector("#main-content");
 const overseasGrids = [...document.querySelectorAll("[data-overseas-grid], [data-home-overseas-grid]")];
 const domesticGrids = [...document.querySelectorAll("[data-domestic-grid], [data-home-domestic-grid]")];
+const portfolioConfig = window.PORTFOLIO_CONFIG || {};
+
+function safeText(value, fallback = "") {
+  return typeof value === "string" ? value.trim().slice(0, 280) : fallback;
+}
+
+function safeMediaUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return "";
+
+  try {
+    const url = new URL(value, window.location.href);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeRemoteWork(work) {
+  if (!work || typeof work !== "object") return null;
+
+  const category = work.category === "domestic" ? "domestic" : work.category === "overseas" ? "overseas" : "";
+  const title = safeText(work.title);
+  const video = safeMediaUrl(work.video);
+  const poster = safeMediaUrl(work.poster);
+  if (!category || !title || !video || !poster) return null;
+
+  return {
+    id: safeText(work.id, `${category}-${title}`),
+    category,
+    title,
+    englishTitle: safeText(work.englishTitle),
+    video,
+    poster,
+    duration: safeText(work.duration, "—"),
+    format: safeText(work.format, "竖屏"),
+    role: safeText(work.role, category === "overseas" ? "海外漫剧项目" : "国内漫剧项目"),
+    summary: safeText(work.summary, "完整剧情成片。"),
+  };
+}
 
 function renderDramaWorks({ grid, works, category, typeLabel, projectClass = "" }) {
   if (!grid) return;
@@ -80,24 +120,70 @@ function renderDramaWorks({ grid, works, category, typeLabel, projectClass = "" 
   grid.replaceChildren(...cards);
 }
 
-overseasGrids.forEach((grid) => {
-  renderDramaWorks({
-    grid,
-    works: window.PORTFOLIO_OVERSEAS_WORKS || [],
-    category: "海外漫剧",
-    typeLabel: "COMPANY PROJECT",
-  });
-});
+function mergeWorks(baseWorks, remoteWorks) {
+  const merged = [...baseWorks];
+  const existing = new Set(baseWorks.map((work) => safeText(work.id, work.title).toLowerCase()));
 
-domesticGrids.forEach((grid) => {
-  renderDramaWorks({
-    grid,
-    works: window.PORTFOLIO_DOMESTIC_WORKS || [],
-    category: "国内漫剧",
-    typeLabel: "DOMESTIC PROJECT",
-    projectClass: "domestic-project",
+  remoteWorks.forEach((work) => {
+    const key = safeText(work.id, work.title).toLowerCase();
+    if (!existing.has(key)) {
+      existing.add(key);
+      merged.push(work);
+    }
   });
-});
+
+  return merged;
+}
+
+function renderAllDramaWorks(remoteWorks = []) {
+  const remoteOverseas = remoteWorks.filter((work) => work.category === "overseas");
+  const remoteDomestic = remoteWorks.filter((work) => work.category === "domestic");
+  const overseasWorks = mergeWorks(window.PORTFOLIO_OVERSEAS_WORKS || [], remoteOverseas);
+  const domesticWorks = mergeWorks(window.PORTFOLIO_DOMESTIC_WORKS || [], remoteDomestic);
+
+  overseasGrids.forEach((grid) => {
+    renderDramaWorks({
+      grid,
+      works: overseasWorks,
+      category: "海外漫剧",
+      typeLabel: "COMPANY PROJECT",
+    });
+  });
+
+  domesticGrids.forEach((grid) => {
+    renderDramaWorks({
+      grid,
+      works: domesticWorks,
+      category: "国内漫剧",
+      typeLabel: "DOMESTIC PROJECT",
+      projectClass: "domestic-project",
+    });
+  });
+}
+
+async function loadPublishedWorks() {
+  if (!portfolioConfig.catalogUrl) return;
+
+  try {
+    const separator = portfolioConfig.catalogUrl.includes("?") ? "&" : "?";
+    const response = await fetch(`${portfolioConfig.catalogUrl}${separator}v=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Catalog request failed: ${response.status}`);
+    const payload = await response.json();
+    const remoteWorks = (Array.isArray(payload) ? payload : payload.works || [])
+      .filter((work) => work?.published !== false)
+      .map(normalizeRemoteWork)
+      .filter(Boolean);
+    renderAllDramaWorks(remoteWorks);
+    refreshReveals();
+  } catch (error) {
+    console.info("Remote portfolio catalog is unavailable; using built-in works.", error);
+  }
+}
+
+renderAllDramaWorks();
+loadPublishedWorks();
 
 const routes = {
   home: "home",
@@ -247,11 +333,11 @@ document.querySelectorAll("[data-open-contact]").forEach((button) => {
   button.addEventListener("click", openContact);
 });
 
-document.querySelectorAll("[data-play-film]").forEach((trigger) => {
-  trigger.addEventListener("click", (event) => {
-    event.preventDefault();
-    openFilm(trigger);
-  });
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-play-film]");
+  if (!trigger) return;
+  event.preventDefault();
+  openFilm(trigger);
 });
 
 document.querySelector("[data-close-contact]")?.addEventListener("click", closeContact);
