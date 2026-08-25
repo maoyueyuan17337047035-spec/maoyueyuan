@@ -35,7 +35,7 @@ def wire_mock_cos(page, state):
         ),
     )
     page.route(
-        "https://maoyueyuan-1474173929.cos.ap-guangzhou.myqcloud.com/portfolio/v1/uploads/**",
+        "https://maouyueyuan-1474173929.cos.ap-guangzhou.myqcloud.com/portfolio/v1/uploads/**",
         lambda route: route.fulfill(
             status=200,
             content_type="image/jpeg",
