@@ -1,11 +1,12 @@
 import json
+import os
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE_URL = "http://127.0.0.1:4174"
+BASE_URL = os.environ.get("PORTFOLIO_BASE_URL", "http://127.0.0.1:4174").rstrip("/")
 API_URL = "https://portfolio-admin.example.test"
 
 
