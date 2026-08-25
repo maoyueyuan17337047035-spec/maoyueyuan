@@ -19,6 +19,9 @@ const posterPlaceholder = posterPreview?.querySelector("div");
 const videoName = document.querySelector("[data-video-name]");
 const videoMeta = document.querySelector("[data-video-meta]");
 const posterName = document.querySelector("[data-poster-name]");
+const libraryList = document.querySelector("[data-library-list]");
+const libraryMessage = document.querySelector("[data-library-message]");
+const refreshLibraryButton = document.querySelector("[data-refresh-library]");
 
 let cosClient = null;
 let detectedVideo = null;
@@ -52,6 +55,7 @@ function showWorkspace() {
   authPanel.hidden = true;
   workspace.hidden = false;
   setStep("prepare");
+  void loadCloudWorks();
 }
 
 function disconnectCos(message = "") {
@@ -210,6 +214,36 @@ function uploadCosObject({ key, body, contentType, onProgress }) {
   });
 }
 
+function deleteCosObject(key) {
+  return new Promise((resolve, reject) => {
+    if (!cosClient) return reject(new Error("腾讯云连接已经断开，请重新连接。"));
+    cosClient.deleteObject(
+      {
+        Bucket: config.bucket,
+        Region: config.region,
+        Key: key,
+      },
+      (error, data) => {
+        if (error) reject(new Error(formatCosError(error, "云端文件删除失败。")));
+        else resolve(data);
+      },
+    );
+  });
+}
+
+function keyFromPublicUrl(value) {
+  try {
+    const url = new URL(value);
+    const base = new URL(config.publicBaseUrl);
+    if (url.origin !== base.origin) return "";
+    const basePath = base.pathname.replace(/\/$/, "");
+    const pathname = url.pathname.startsWith(basePath) ? url.pathname.slice(basePath.length) : url.pathname;
+    return pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
+  } catch {
+    return "";
+  }
+}
+
 async function readCatalog() {
   const emptyCatalog = { version: 1, updatedAt: null, works: [] };
   if (!config.catalogUrl) return emptyCatalog;
@@ -240,6 +274,129 @@ async function writeCatalog(catalog) {
     body,
     contentType: "application/json;charset=utf-8",
   });
+}
+
+function renderCloudWorks(works) {
+  if (!libraryList) return;
+  if (!works.length) {
+    const empty = document.createElement("p");
+    empty.className = "library-empty";
+    empty.textContent = "云端目录中还没有作品。完成第一次上传后，作品会出现在这里。";
+    libraryList.replaceChildren(empty);
+    return;
+  }
+
+  const items = [...works]
+    .sort((left, right) => String(right?.createdAt || "").localeCompare(String(left?.createdAt || "")))
+    .map((work) => {
+      const item = document.createElement("article");
+      item.className = `library-item${work.published === false ? " is-unpublished" : ""}`;
+      item.dataset.libraryItem = "";
+      item.dataset.workId = String(work.id || "");
+
+      const poster = document.createElement("img");
+      poster.src = String(work.poster || "");
+      poster.alt = `《${String(work.title || "未命名作品")}》封面`;
+      poster.loading = "lazy";
+
+      const copy = document.createElement("div");
+      copy.className = "library-item-copy";
+      const state = document.createElement("span");
+      state.textContent = `${work.category === "domestic" ? "国内漫剧" : "海外漫剧"} · ${work.published === false ? "已下架" : "公开中"}`;
+      const title = document.createElement("h4");
+      title.textContent = String(work.title || "未命名作品");
+      const meta = document.createElement("p");
+      meta.textContent = `${String(work.duration || "—")} · ${String(work.format || "—")}`;
+      copy.append(state, title, meta);
+
+      const actions = document.createElement("div");
+      actions.className = "library-actions";
+      const visibility = document.createElement("button");
+      visibility.type = "button";
+      visibility.dataset.toggleWork = String(work.id || "");
+      visibility.textContent = work.published === false ? "重新上架" : "下架";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.dataset.deleteWork = String(work.id || "");
+      remove.textContent = "彻底删除";
+      actions.append(visibility, remove);
+
+      item.append(poster, copy, actions);
+      return item;
+    });
+
+  libraryList.replaceChildren(...items);
+}
+
+async function loadCloudWorks() {
+  if (!cosClient) return;
+  setMessage(libraryMessage, "正在读取腾讯云作品目录…");
+  try {
+    const catalog = await readCatalog();
+    renderCloudWorks(catalog.works);
+    setMessage(libraryMessage, catalog.works.length ? `已读取 ${catalog.works.length} 部云端作品。` : "");
+  } catch (error) {
+    setMessage(libraryMessage, formatCosError(error, error.message), "error");
+  }
+}
+
+async function toggleCloudWork(workId, button) {
+  button.disabled = true;
+  setMessage(libraryMessage, "正在更新作品状态…");
+  try {
+    const catalog = await readCatalog();
+    const work = catalog.works.find((item) => String(item?.id) === workId);
+    if (!work) throw new Error("作品已不在云端目录中，请刷新列表。 ");
+    work.published = work.published === false;
+    work.updatedAt = new Date().toISOString();
+    catalog.updatedAt = work.updatedAt;
+    await writeCatalog(catalog);
+    await loadCloudWorks();
+    setMessage(libraryMessage, `《${String(work.title || "未命名作品")}》已${work.published ? "重新上架" : "下架"}。`, "success");
+  } catch (error) {
+    setMessage(libraryMessage, formatCosError(error, error.message), "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteCloudWork(workId, button) {
+  const item = button.closest("[data-library-item]");
+  const title = item?.querySelector("h4")?.textContent || "这部作品";
+  const confirmed = window.confirm(`确定彻底删除《${title}》吗？\n\n网站记录、视频和封面都会从腾讯云中删除，此操作无法撤销。`);
+  if (!confirmed) return;
+
+  item?.querySelectorAll("button").forEach((control) => {
+    control.disabled = true;
+  });
+  setMessage(libraryMessage, `正在删除《${title}》…`);
+
+  try {
+    const catalog = await readCatalog();
+    const work = catalog.works.find((entry) => String(entry?.id) === workId);
+    if (!work) throw new Error("作品已不在云端目录中，请刷新列表。 ");
+
+    const now = new Date().toISOString();
+    catalog.updatedAt = now;
+    catalog.works = catalog.works.filter((entry) => String(entry?.id) !== workId);
+    await writeCatalog(catalog);
+
+    const keys = [work.videoKey || keyFromPublicUrl(work.video), work.posterKey || keyFromPublicUrl(work.poster)].filter(Boolean);
+    const deletions = await Promise.allSettled([...new Set(keys)].map((key) => deleteCosObject(key)));
+    const failed = deletions.filter((result) => result.status === "rejected").length;
+    await loadCloudWorks();
+    if (failed) {
+      setMessage(libraryMessage, `《${title}》已从网站删除，但有 ${failed} 个云端素材未能移除。`, "error");
+    } else {
+      setMessage(libraryMessage, `《${title}》及其云端素材已彻底删除。`, "success");
+    }
+  } catch (error) {
+    setMessage(libraryMessage, formatCosError(error, error.message), "error");
+    item?.querySelectorAll("button").forEach((control) => {
+      control.disabled = false;
+    });
+  }
 }
 
 loginForm?.addEventListener("submit", (event) => {
@@ -390,6 +547,7 @@ ingestForm?.addEventListener("submit", async (event) => {
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "center" });
     setMessage(publishMessage, "视频、封面和作品资料均已保存到腾讯云 COS。", "success");
+    await loadCloudWorks();
   } catch (error) {
     setMessage(publishMessage, formatCosError(error, error.message || "上传未完成，请重试。"), "error");
     setProgress(progressBar.value, "上传没有完成，请按提示检查后重试");
@@ -399,6 +557,18 @@ ingestForm?.addEventListener("submit", async (event) => {
 });
 
 document.querySelector("[data-logout]")?.addEventListener("click", () => disconnectCos());
+
+refreshLibraryButton?.addEventListener("click", () => void loadCloudWorks());
+
+libraryList?.addEventListener("click", (event) => {
+  const toggleButton = event.target.closest("[data-toggle-work]");
+  if (toggleButton) {
+    void toggleCloudWork(toggleButton.dataset.toggleWork, toggleButton);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-work]");
+  if (deleteButton) void deleteCloudWork(deleteButton.dataset.deleteWork, deleteButton);
+});
 
 document.querySelector("[data-add-another]")?.addEventListener("click", () => {
   ingestForm.reset();

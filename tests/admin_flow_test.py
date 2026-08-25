@@ -7,18 +7,39 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE_URL = os.environ.get("PORTFOLIO_BASE_URL", "http://127.0.0.1:4174").rstrip("/")
+
+
 def wire_mock_cos(page, state):
-    def receive_upload(route):
+    state.setdefault("catalog", {"version": 1, "works": []})
+    state.setdefault("uploads", [])
+    state.setdefault("deletions", [])
+
+    def receive_object_request(route):
+        if route.request.method == "DELETE":
+            state["deletions"].append(route.request.url)
+            route.fulfill(status=204, body="")
+            return
+
         state["uploads"].append(route.request.url)
+        if "portfolio%2Fcatalog%2Fworks.json" in route.request.url:
+            state["catalog"] = json.loads(route.request.post_data or "{}")
         route.fulfill(status=200, headers={"ETag": '"test-etag"'}, body="")
 
-    page.route("https://upload.cos.test/**", receive_upload)
+    page.route("https://upload.cos.test/**", receive_object_request)
     page.route(
         "**/portfolio/catalog/works.json*",
         lambda route: route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({"version": 1, "works": []}),
+            body=json.dumps(state["catalog"]),
+        ),
+    )
+    page.route(
+        "https://maoyueyuan-1474173929.cos.ap-guangzhou.myqcloud.com/portfolio/v1/uploads/**",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="image/jpeg",
+            path=str(ROOT / "assets/images/mozun-fanpai-poster.jpg"),
         ),
     )
 
@@ -38,6 +59,11 @@ def install_mock_cos(page):
               callback(null, { statusCode: 200, Key: options.Key });
             }).catch(callback);
           }
+          deleteObject(options, callback) {
+            fetch('https://upload.cos.test/' + encodeURIComponent(options.Key), {
+              method: 'DELETE',
+            }).then(() => callback(null, { statusCode: 204, Key: options.Key })).catch(callback);
+          }
         };
         void 0;
         """
@@ -45,7 +71,7 @@ def install_mock_cos(page):
 
 
 def main():
-    state = {"uploads": []}
+    state = {"uploads": [], "deletions": [], "catalog": {"version": 1, "works": []}}
     issues = []
     screenshots = ROOT / "tests" / "artifacts"
     screenshots.mkdir(parents=True, exist_ok=True)
@@ -78,7 +104,14 @@ def main():
         assert any("video.mp4" in url for url in state["uploads"])
         assert any("poster.jpg" in url for url in state["uploads"])
         assert any("portfolio%2Fcatalog%2Fworks.json" in url for url in state["uploads"])
+        page.locator("[data-library-item]", has_text="测试海外漫剧").wait_for()
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.locator("[data-library-item]", has_text="测试海外漫剧").get_by_role("button", name="彻底删除").click()
+        page.locator("[data-library-item]").wait_for(state="detached")
+        assert state["catalog"]["works"] == []
+        assert len(state["deletions"]) == 2
 
         page.get_by_role("button", name="继续上传下一部").click()
         page.locator("input[name='title']").fill("自动封面测试")
@@ -87,10 +120,18 @@ def main():
         page.get_by_role("button", name="上传并发布").click()
         page.locator("[data-publish-result]").wait_for(state="visible")
         assert page.locator("[data-poster-name]").inner_text() == "已从视频自动生成封面"
-        assert len(state["uploads"]) == 6
+        item = page.locator("[data-library-item]", has_text="自动封面测试")
+        item.wait_for()
+        item.get_by_role("button", name="下架", exact=True).click()
+        item.get_by_role("button", name="重新上架", exact=True).wait_for()
+        assert state["catalog"]["works"][0]["published"] is False
+        item.get_by_role("button", name="重新上架", exact=True).click()
+        item.get_by_role("button", name="下架", exact=True).wait_for()
+        assert state["catalog"]["works"][0]["published"] is True
+        assert len(state["uploads"]) == 9
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
-        wire_mock_cos(mobile, {"uploads": []})
+        wire_mock_cos(mobile, {"uploads": [], "deletions": [], "catalog": {"version": 1, "works": []}})
         mobile.goto(f"{BASE_URL}/admin.html")
         mobile.wait_for_load_state("networkidle")
         install_mock_cos(mobile)
@@ -137,7 +178,17 @@ def main():
 
         browser.close()
 
-    print(json.dumps({"ok": not issues, "issues": issues, "uploads": state["uploads"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": not issues,
+                "issues": issues,
+                "upload_requests": len(state["uploads"]),
+                "delete_requests": len(state["deletions"]),
+            },
+            ensure_ascii=False,
+        )
+    )
     if issues:
         raise SystemExit(1)
 

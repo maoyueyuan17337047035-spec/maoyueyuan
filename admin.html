@@ -154,6 +154,19 @@
             <button type="button" data-add-another>继续上传下一部</button>
           </div>
         </section>
+
+        <section class="library-panel" data-library-panel aria-labelledby="library-title">
+          <header class="library-heading">
+            <div>
+              <p class="admin-eyebrow">CLOUD LIBRARY</p>
+              <h3 id="library-title">云端作品管理</h3>
+              <p>这里显示通过本后台发布的作品。下架会保留素材；彻底删除会同时移除视频与封面。</p>
+            </div>
+            <button class="text-button" type="button" data-refresh-library>刷新列表</button>
+          </header>
+          <p class="form-message" data-library-message aria-live="polite"></p>
+          <div class="library-list" data-library-list aria-live="polite"></div>
+        </section>
       </section>
     </main>
 
