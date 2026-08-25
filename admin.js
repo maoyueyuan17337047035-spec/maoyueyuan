@@ -119,7 +119,7 @@ function formatCosError(error, fallback = "腾讯云请求失败，请检查密�
           ? error.error
           : "";
   if (/cors|network|failed to fetch|load failed/i.test(message)) {
-    return "浏览器无法连接 COS，请在存储桶中配置 GitHub Pages 的跨域访问规则。";
+    return "腾讯云连接被本机网络代理拦截。请暂时关闭 Clash Verge 的系统代理，或将 myqcloud.com 与 tencentcos.cn 设为 DIRECT 后重试。";
   }
   return [code, message].filter(Boolean).join("：") || fallback;
 }
@@ -283,7 +283,7 @@ async function readCatalog() {
     };
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error("无法读取作品目录，请先配置存储桶跨域访问规则。");
+      throw new Error("无法读取作品目录。请暂时关闭 Clash Verge 的系统代理，或将腾讯云 COS 域名设为 DIRECT。");
     }
     throw error;
   }
