@@ -107,6 +107,14 @@ function formatDuration(seconds) {
   return `${seconds.toFixed(1)}s`;
 }
 
+function normalizedWorkTitle(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/[\s《》〈〉「」『』【】\[\]()（）·:：,，.。!！?？'"“”‘’_\-—]/g, "");
+}
+
 function formatCosError(error, fallback = "腾讯云请求失败，请检查密钥权限与跨域设置。") {
   if (!error) return fallback;
   const code = typeof error.code === "string" ? error.code : typeof error.Code === "string" ? error.Code : "";
@@ -208,7 +216,7 @@ function publicUrlForKey(key) {
   return `${base}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function uploadCosObject({ key, body, contentType, onProgress }) {
+function uploadCosObject({ key, body, contentType, cacheControl = "", onProgress }) {
   return new Promise((resolve, reject) => {
     if (!cosClient) return reject(new Error("腾讯云连接已经断开，请重新连接。"));
     cosClient.putObject(
@@ -219,6 +227,7 @@ function uploadCosObject({ key, body, contentType, onProgress }) {
         Body: body,
         ContentType: contentType,
         ContentDisposition: "inline",
+        ...(cacheControl ? { CacheControl: cacheControl } : {}),
         onProgress: (progress) => {
           const fraction = Number.isFinite(progress?.percent)
             ? progress.percent
@@ -295,6 +304,7 @@ async function writeCatalog(catalog) {
     key: config.catalogKey || "portfolio/catalog/works.json",
     body,
     contentType: "application/json;charset=utf-8",
+    cacheControl: "no-cache, max-age=0, must-revalidate",
   });
 }
 
@@ -510,8 +520,14 @@ ingestForm?.addEventListener("submit", async (event) => {
 
     setStep("authorize");
     setProgress(8, "正在生成腾讯云存储路径");
-    const workId = makeWorkId();
     const category = ingestForm.elements.category.value;
+    const title = ingestForm.elements.title.value.trim();
+    const catalog = await readCatalog();
+    const titleKey = normalizedWorkTitle(title);
+    const replacedWorks = catalog.works.filter(
+      (item) => item?.category === category && normalizedWorkTitle(item?.title) === titleKey,
+    );
+    const workId = makeWorkId();
     const baseKey = `${config.uploadPrefix || "portfolio/v1/uploads"}/${category}/${workId}`;
     const videoKey = `${baseKey}/video.${safeExtension(video, "mp4")}`;
     const posterKey = `${baseKey}/poster.${safeExtension(poster, "jpg")}`;
@@ -521,12 +537,14 @@ ingestForm?.addEventListener("submit", async (event) => {
       key: videoKey,
       body: video,
       contentType: video.type || "video/mp4",
+      cacheControl: "public, max-age=31536000, immutable",
       onProgress: (fraction) => setProgress(10 + fraction * 70, "正在上传成片到腾讯云 COS"),
     });
     await uploadCosObject({
       key: posterKey,
       body: poster,
       contentType: poster.type || "image/jpeg",
+      cacheControl: "public, max-age=31536000, immutable",
       onProgress: (fraction) => setProgress(80 + fraction * 12, "正在上传作品封面"),
     });
 
@@ -538,7 +556,7 @@ ingestForm?.addEventListener("submit", async (event) => {
     const work = {
       id: workId,
       category,
-      title: ingestForm.elements.title.value.trim(),
+      title,
       englishTitle: ingestForm.elements.englishTitle.value.trim(),
       duration: formatDuration(detectedVideo?.duration),
       format,
@@ -552,17 +570,29 @@ ingestForm?.addEventListener("submit", async (event) => {
       createdAt: now,
       updatedAt: now,
     };
-    const catalog = await readCatalog();
     catalog.updatedAt = now;
-    catalog.works = [...catalog.works.filter((item) => item?.id !== work.id), work];
+    catalog.works = [
+      ...catalog.works.filter(
+        (item) => item?.id !== work.id && !(item?.category === category && normalizedWorkTitle(item?.title) === titleKey),
+      ),
+      work,
+    ];
     await writeCatalog(catalog);
+
+    const replacedKeys = replacedWorks
+      .flatMap((item) => [item.videoKey || keyFromPublicUrl(item.video), item.posterKey || keyFromPublicUrl(item.poster)])
+      .filter(Boolean);
+    const cleanup = await Promise.allSettled([...new Set(replacedKeys)].map((key) => deleteCosObject(key)));
+    const cleanupFailures = cleanup.filter((result) => result.status === "rejected").length;
 
     setProgress(100, work.published ? "作品已经公开" : "作品已经存入云端草稿");
     document.querySelectorAll("[data-step]").forEach((item) => item.classList.add("is-complete"));
     resultTitle.textContent = `《${work.title}》${work.published ? "已发布" : "已入库"}`;
     resultPanel.hidden = false;
     resultPanel.scrollIntoView({ behavior: "smooth", block: "center" });
-    setMessage(publishMessage, "视频、封面和作品资料均已保存到腾讯云 COS。", "success");
+    const replacementNote = replacedWorks.length ? ` 已自动替换 ${replacedWorks.length} 个同名旧版本，前台不会重复显示。` : "";
+    const cleanupNote = cleanupFailures ? ` 其中 ${cleanupFailures} 个旧素材未能清理，但不影响前台去重。` : "";
+    setMessage(publishMessage, `视频、封面和作品资料均已保存到腾讯云 COS。${replacementNote}${cleanupNote}`, cleanupFailures ? "error" : "success");
     await loadCloudWorks();
   } catch (error) {
     setMessage(publishMessage, formatCosError(error, error.message || "上传未完成，请重试。"), "error");

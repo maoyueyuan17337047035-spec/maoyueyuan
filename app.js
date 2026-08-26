@@ -31,6 +31,27 @@ function safeMediaUrl(value) {
   }
 }
 
+function normalizedWorkTitle(value) {
+  return safeText(value)
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/[\s《》〈〉「」『』【】\[\]()（）·:：,，.。!！?？'"“”‘’_\-—]/g, "");
+}
+
+function optimizedPosterUrl(value, width = 960) {
+  const source = safeMediaUrl(value);
+  if (!source || !portfolioConfig.publicBaseUrl) return source;
+
+  try {
+    const url = new URL(source);
+    const cosBase = new URL(portfolioConfig.publicBaseUrl);
+    if (url.origin !== cosBase.origin || url.search) return source;
+    return `${source}?imageMogr2/thumbnail/${width}x/format/webp/quality/78`;
+  } catch {
+    return source;
+  }
+}
+
 function normalizeRemoteWork(work) {
   if (!work || typeof work !== "object") return null;
 
@@ -66,7 +87,7 @@ function renderDramaWorks({ grid, works, category, typeLabel, projectClass = "" 
     posterLink.href = work.video;
     posterLink.dataset.playFilm = "";
     posterLink.dataset.video = work.video;
-    posterLink.dataset.poster = work.poster;
+    posterLink.dataset.poster = optimizedPosterUrl(work.poster, 1280);
     posterLink.dataset.title = work.title;
     posterLink.dataset.meta = `${category} · ${work.duration} · ${work.format}`;
     posterLink.dataset.role = work.role;
@@ -75,7 +96,7 @@ function renderDramaWorks({ grid, works, category, typeLabel, projectClass = "" 
     const poster = document.createElement("img");
     poster.loading = "lazy";
     poster.decoding = "async";
-    poster.src = work.poster;
+    poster.src = optimizedPosterUrl(work.poster);
     poster.alt = `${category}《${work.title}》封面`;
 
     const play = document.createElement("span");
@@ -121,18 +142,11 @@ function renderDramaWorks({ grid, works, category, typeLabel, projectClass = "" 
 }
 
 function mergeWorks(baseWorks, remoteWorks) {
-  const merged = [...baseWorks];
-  const existing = new Set(baseWorks.map((work) => safeText(work.id, work.title).toLowerCase()));
-
-  remoteWorks.forEach((work) => {
-    const key = safeText(work.id, work.title).toLowerCase();
-    if (!existing.has(key)) {
-      existing.add(key);
-      merged.push(work);
-    }
-  });
-
-  return merged;
+  const merged = new Map();
+  baseWorks.forEach((work) => merged.set(normalizedWorkTitle(work.title) || safeText(work.id), work));
+  // 云端版本拥有更高优先级；同名作品只保留目录中最后（最新）的一份。
+  remoteWorks.forEach((work) => merged.set(normalizedWorkTitle(work.title) || safeText(work.id), work));
+  return [...merged.values()];
 }
 
 function renderAllDramaWorks(remoteWorks = []) {
@@ -166,9 +180,7 @@ async function loadPublishedWorks() {
 
   try {
     const separator = portfolioConfig.catalogUrl.includes("?") ? "&" : "?";
-    const response = await fetch(`${portfolioConfig.catalogUrl}${separator}v=${Date.now()}`, {
-      cache: "no-store",
-    });
+    const response = await fetch(`${portfolioConfig.catalogUrl}${separator}v=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`Catalog request failed: ${response.status}`);
     const payload = await response.json();
     const remoteWorks = (Array.isArray(payload) ? payload : payload.works || [])

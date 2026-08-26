@@ -131,6 +131,19 @@ def main():
         assert state["catalog"]["works"][0]["published"] is True
         assert len(state["uploads"]) == 9
 
+        # 同分类、同片名再次发布时，应替换目录记录并清理上一版素材。
+        page.get_by_role("button", name="继续上传下一部").click()
+        page.locator("input[name='title']").fill("《自动封面测试》")
+        page.locator("input[name='video']").set_input_files(str(ROOT / "assets/video/mozun-fanpai.mp4"))
+        page.locator("input[name='poster']").set_input_files(str(ROOT / "assets/images/mozun-fanpai-poster.jpg"))
+        page.locator("[data-video-meta]").filter(has_text="×").wait_for()
+        page.get_by_role("button", name="上传并发布").click()
+        page.locator("[data-publish-result]").wait_for(state="visible")
+        assert len(state["catalog"]["works"]) == 1
+        assert state["catalog"]["works"][0]["title"] == "《自动封面测试》"
+        assert "前台不会重复显示" in page.locator("[data-publish-message]").inner_text()
+        assert len(state["deletions"]) == 4
+
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
         wire_mock_cos(mobile, {"uploads": [], "deletions": [], "catalog": {"version": 1, "works": []}})
         mobile.goto(f"{BASE_URL}/admin.html")
@@ -142,6 +155,14 @@ def main():
         public_page = browser.new_page(viewport={"width": 1440, "height": 1000})
         public_page.on("pageerror", lambda error: issues.append(f"public-pageerror:{error}"))
         public_page.route(
+            "https://maouyueyuan-1474173929.cos.ap-guangzhou.myqcloud.com/**",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="image/webp",
+                path=str(ROOT / "assets/images/mozun-fanpai-poster.jpg"),
+            ),
+        )
+        public_page.route(
             "**/portfolio/catalog/works.json*",
             lambda route: route.fulfill(
                 status=200,
@@ -150,6 +171,18 @@ def main():
                     {
                         "version": 1,
                         "works": [
+                            {
+                                "id": "remote-replacement",
+                                "category": "overseas",
+                                "title": "《黑老大》",
+                                "video": f"{BASE_URL}/assets/video/mozun-fanpai.mp4",
+                                "poster": "https://maouyueyuan-1474173929.cos.ap-guangzhou.myqcloud.com/portfolio/v1/uploads/test/poster.png",
+                                "duration": "15.1s",
+                                "format": "横屏",
+                                "role": "云端替换版本",
+                                "summary": "用于验证同名作品不会重复。",
+                                "published": True,
+                            },
                             {
                                 "id": "remote-test",
                                 "category": "overseas",
@@ -172,6 +205,9 @@ def main():
         public_page.wait_for_load_state("networkidle")
         public_page.locator("[data-home-overseas-grid] article").nth(3).wait_for()
         assert public_page.locator("[data-home-overseas-grid] article").count() == 4
+        assert public_page.locator("[data-home-overseas-grid] h3", has_text="黑老大").count() == 1
+        replacement_poster = public_page.locator("[data-home-overseas-grid] article").filter(has_text="云端替换版本").locator("img")
+        assert "imageMogr2/thumbnail/960x/format/webp/quality/78" in replacement_poster.get_attribute("src")
         public_page.locator("[data-home-overseas-grid] article").nth(3).locator("[data-play-film]").click()
         public_page.locator("[data-film-modal]").wait_for(state="visible")
         assert public_page.locator("[data-film-title]").inner_text() == "云端新增作品"
